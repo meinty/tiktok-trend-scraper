@@ -192,7 +192,7 @@ def analyze_video_with_gemini(video: dict, comments: list) -> dict:
 
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_AI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3')
 
     # Build context from available data
     caption = video.get('caption', '')
@@ -312,7 +312,7 @@ def generate_brief(video: dict, project: dict, analysis: dict = None) -> str:
 
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_AI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3')
 
     template = project.get('brief_template', '') or _default_brief_template()
     brand_bible = project.get('brand_bible', '') or ''
