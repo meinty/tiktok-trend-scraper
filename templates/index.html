@@ -455,6 +455,22 @@
   .empty .empty-icon { font-size: 40px; margin-bottom: 12px; }
   .empty p { font-size: 14px; }
 
+  /* SORT TOGGLE */
+  .sort-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .sort-bar-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-right: 4px; }
+  .sort-btn {
+    padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: var(--transition);
+  }
+  .sort-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+  .sort-btn.active { background: rgba(254,44,85,0.15); border-color: rgba(254,44,85,0.4); color: var(--accent); }
+  .trending-badge {
+    display: inline-block; background: rgba(254,44,85,0.15); border: 1px solid rgba(254,44,85,0.3);
+    color: var(--accent); font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-left: 4px; vertical-align: middle;
+  }
+
   /* UTILS */
   .text-muted { color: var(--text-muted); }
   .text-accent { color: var(--accent); }
@@ -752,6 +768,8 @@ let currentAnalysis = null;
 let selectedProjectId = null;
 let bookmarkedIds = new Set();
 const videoCache = new Map(); // id -> video object, avoids onclick JSON encoding issues
+let currentSearchVideos = []; // full result set for re-sorting
+let currentSortMode = 'views'; // 'views' | 'trending'
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 async function init() {
@@ -917,20 +935,65 @@ function repeatSearch(keyword, dateRange, count) {
   doSearch();
 }
 
+function trendingScore(v) {
+  const engagement = (v.likes + v.comments + v.shares) / Math.max(v.views, 1);
+  const daysOld = v.created_at
+    ? (Date.now() - new Date(v.created_at).getTime()) / 86400000
+    : 30;
+  const recency = 1 / (1 + daysOld / 14); // halves every 2 weeks
+  return engagement * recency;
+}
+
 function renderSearchResults(videos, keyword) {
+  currentSearchVideos = videos;
+  currentSortMode = 'views';
+  _renderResults(keyword);
+}
+
+function setSortMode(mode) {
+  currentSortMode = mode;
+  document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  const grid = document.getElementById('results-grid');
+  if (!grid) return;
+  const sorted = sortedVideos();
+  sorted.forEach(v => videoCache.set(v.id, v));
+  const isTrending = currentSortMode === 'trending';
+  grid.innerHTML = sorted.map(v => videoCardHTML(v, isTrending)).join('');
+}
+
+function sortedVideos() {
+  const vids = [...currentSearchVideos];
+  if (currentSortMode === 'trending') {
+    vids.sort((a, b) => trendingScore(b) - trendingScore(a));
+  } else {
+    vids.sort((a, b) => b.views - a.views);
+  }
+  return vids;
+}
+
+function _renderResults(keyword) {
   const el = document.getElementById('search-results');
-  if (!videos.length) {
+  if (!currentSearchVideos.length) {
     el.innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><p>No results for "${escHtml(keyword)}"</p></div>`;
     return;
   }
-  videos.forEach(v => videoCache.set(v.id, v));
-  el.innerHTML = `<p style="font-size:13px; color:var(--text-muted); margin-bottom:16px">${videos.length} videos found for <strong style="color:var(--text)">"${escHtml(keyword)}"</strong></p>
-  <div class="video-grid">${videos.map(v => videoCardHTML(v)).join('')}</div>`;
+  currentSearchVideos.forEach(v => videoCache.set(v.id, v));
+  const sorted = sortedVideos();
+  el.innerHTML = `
+    <div class="sort-bar">
+      <span class="sort-bar-label">Sort</span>
+      <button class="sort-btn active" data-mode="views" onclick="setSortMode('views')">By views</button>
+      <button class="sort-btn" data-mode="trending" onclick="setSortMode('trending')">Trending score</button>
+      <span style="font-size:11px; color:var(--text-dim); margin-left:4px">(engagement × recency)</span>
+    </div>
+    <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px">${currentSearchVideos.length} videos found for <strong style="color:var(--text)">"${escHtml(keyword)}"</strong></p>
+    <div class="video-grid" id="results-grid">${sorted.map(v => videoCardHTML(v, false)).join('')}</div>`;
 }
 
-function videoCardHTML(v) {
+function videoCardHTML(v, showTrending = false) {
   const isBookmarked = bookmarkedIds.has(v.id);
-  // Use data-video-id to avoid JSON/quote issues in onclick attributes
+  const score = showTrending ? trendingScore(v) : null;
+  const engPct = v.views > 0 ? Math.round((v.likes + v.comments + v.shares) / v.views * 100) : 0;
   return `<div class="video-card" data-video-id="${escHtml(v.id)}" onclick="openVideoById(this.dataset.videoId)">
     ${isBookmarked ? '<div class="bookmark-indicator">♥</div>' : ''}
     ${v.cover ? `<img class="video-cover" src="${escHtml(v.cover)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
@@ -942,8 +1005,9 @@ function videoCardHTML(v) {
       <div class="video-stats">
         <span class="stat"><span class="s-icon">▶</span>${formatNum(v.views)}</span>
         <span class="stat"><span class="s-icon">♥</span>${formatNum(v.likes)}</span>
-        <span class="stat"><span class="s-icon">💬</span>${formatNum(v.comments)}</span>
+        ${showTrending ? `<span class="stat" title="Engagement ratio"><span class="s-icon">⚡</span>${engPct}%</span>` : `<span class="stat"><span class="s-icon">💬</span>${formatNum(v.comments)}</span>`}
       </div>
+      ${showTrending && engPct >= 20 ? '<span class="trending-badge">trending</span>' : ''}
     </div>
   </div>`;
 }
