@@ -714,8 +714,10 @@ def delete_brief(brief_id):
 # MAIN
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Init DB on startup regardless of how the app is launched (gunicorn or direct)
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     mode = 'DEMO (add APIFY_API_TOKEN to .env for live data)' if DEMO_MODE else 'LIVE'
     gemini = 'configured' if GOOGLE_AI_API_KEY else 'not configured (add GOOGLE_AI_API_KEY)'
     print(f'\nTikTok Trend Scraper')
