@@ -464,19 +464,19 @@ def suggest_hashtags_for_product(product_info: dict) -> dict:
 
     model = genai.GenerativeModel(model_name)
 
-    prompt = f"""You are a TikTok trend researcher at a creative AI agency.
+    prompt = f"""You are a social media content strategist at a creative agency.
 
-A client wants to find trending TikTok content related to this product:
+A brand wants to research what content creators are making about this product on short-video platforms:
 
 PRODUCT URL: {product_info['url']}
 PRODUCT: {product_info['product_name']}
 DESCRIPTION: {product_info['description'][:500]}
 
-Suggest 8-10 TikTok hashtags to search for relevant trending content. Mix:
-- niche: about this exact product type
+Suggest 8-10 hashtags that creators use when posting about this type of product. Mix:
+- niche: specific to this exact product type
 - category: broader product category
-- trend: viral content formats (haul, unboxing, asmr, review, transformation)
-- audience: who buys/loves this type of product
+- trend: popular content formats (haul, unboxing, asmr, review, transformation)
+- audience: the community of people interested in this product
 
 Return ONLY this JSON, no markdown:
 {{
@@ -486,11 +486,15 @@ Return ONLY this JSON, no markdown:
     {{"tag": "hashtagwithouthash", "type": "niche", "why": "short reason"}},
     ...
   ],
-  "search_tip": "1 sentence tip for how to best research this product on TikTok"
+  "search_tip": "1 sentence tip for researching this product category in creator content"
 }}"""
 
     try:
         response = model.generate_content(prompt)
+        if not response.candidates:
+            feedback = getattr(response, 'prompt_feedback', None)
+            reason = str(feedback) if feedback else 'unknown'
+            return {'error': f'Gemini blocked the request ({reason}). Try a different product URL.'}
         text = response.text.strip()
         if text.startswith('```'):
             text = text.split('```')[1]
