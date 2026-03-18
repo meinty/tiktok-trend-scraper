@@ -467,6 +467,42 @@
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+  /* PRODUCT FINDER */
+  .product-finder {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 24px;
+  }
+  .product-finder-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .product-finder-form { display: flex; gap: 10px; align-items: center; }
+  .product-finder-form .input { flex: 1; min-width: 0; }
+  .product-hashtags-loading {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-muted); margin-top: 14px;
+  }
+  .product-result { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .product-result-name { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+  .product-result-category { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; }
+  .hashtag-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .hashtag-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(105,201,208,0.1); border: 1px solid rgba(105,201,208,0.2);
+    color: var(--accent2); padding: 5px 12px; border-radius: 20px;
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--transition);
+  }
+  .hashtag-chip:hover { background: rgba(105,201,208,0.2); border-color: rgba(105,201,208,0.4); transform: translateY(-1px); }
+  .hashtag-chip-type { font-size: 10px; color: var(--text-dim); font-weight: 400; }
+  .product-search-tip { font-size: 12px; color: var(--text-dim); font-style: italic; }
 </style>
 </head>
 <body>
@@ -538,6 +574,16 @@
         <h1>Search TikTok</h1>
         <p>Find trending videos in any niche</p>
       </div>
+      <!-- PRODUCT FINDER -->
+      <div class="product-finder">
+        <div class="product-finder-label">Product URL → Hashtags</div>
+        <div class="product-finder-form">
+          <input type="text" class="input" id="product-url" placeholder="https://www.action.com/nl-nl/p/... or any product URL" onkeydown="if(event.key==='Enter') analyzeProductUrl()">
+          <button class="btn btn-secondary" id="product-url-btn" onclick="analyzeProductUrl()">Find Hashtags</button>
+        </div>
+        <div id="product-url-result"></div>
+      </div>
+
       <div class="search-form">
         <div class="form-group">
           <label>Keyword</label>
@@ -1247,6 +1293,59 @@ async function deleteProject(id) {
   if (!confirm('Delete this project?')) return;
   await fetch(`/api/projects/${id}`, {method: 'DELETE'});
   loadProjects();
+}
+
+// ─── PRODUCT URL FINDER ──────────────────────────────────────────────────────
+async function analyzeProductUrl() {
+  const url = document.getElementById('product-url').value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('product-url-btn');
+  const resultEl = document.getElementById('product-url-result');
+
+  btn.disabled = true;
+  btn.textContent = '... Analyzing';
+  resultEl.innerHTML = '<div class="product-hashtags-loading"><div class="spinner"></div> Scraping product page and generating hashtags...</div>';
+
+  try {
+    const r = await fetch('/api/product-hashtags', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url})
+    });
+    const data = await r.json();
+    if (data.error) {
+      resultEl.innerHTML = `<div class="product-hashtags-loading" style="color:var(--accent)">${escHtml(data.error)}</div>`;
+      return;
+    }
+    renderProductHashtags(data, resultEl);
+  } catch(e) {
+    resultEl.innerHTML = `<div class="product-hashtags-loading" style="color:var(--accent)">Failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find Hashtags';
+  }
+}
+
+function renderProductHashtags(data, el) {
+  const chips = (data.hashtags || []).map(h => `
+    <div class="hashtag-chip" data-tag="${escHtml(h.tag)}" onclick="searchFromHashtag(this.dataset.tag)" title="${escHtml(h.why || '')}">
+      #${escHtml(h.tag)}<span class="hashtag-chip-type">${escHtml(h.type || '')}</span>
+    </div>`).join('');
+
+  el.innerHTML = `<div class="product-result">
+    <div class="product-result-name">${escHtml(data.product_name || '')}</div>
+    <div class="product-result-category">${escHtml(data.category || '')}</div>
+    <div class="hashtag-chips">${chips}</div>
+    ${data.search_tip ? `<div class="product-search-tip">${escHtml(data.search_tip)}</div>` : ''}
+  </div>`;
+}
+
+function searchFromHashtag(tag) {
+  document.getElementById('search-keyword').value = tag;
+  document.getElementById('product-url-result').innerHTML = '';
+  document.querySelector('.search-form').scrollIntoView({behavior: 'smooth'});
+  doSearch();
 }
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────

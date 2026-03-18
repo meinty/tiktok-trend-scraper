@@ -380,6 +380,118 @@ Generate a complete creative brief following the template above, adapted to this
     except Exception as e:
         return f'Error generating brief: {e}'
 
+def scrape_product_page(url: str) -> dict:
+    """Fetch basic product info from a product page URL."""
+    from html.parser import HTMLParser
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'nl-NL,nl;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    resp = requests.get(url, headers=headers, timeout=20)
+    resp.raise_for_status()
+
+    class PageParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.title = ''; self.og_title = ''; self.meta_desc = ''; self.og_desc = ''
+            self.h1 = ''; self.text_blocks = []
+            self.in_title = False; self.in_h1 = False; self._in_p = False
+
+        def handle_starttag(self, tag, attrs):
+            d = dict(attrs)
+            if tag == 'title': self.in_title = True
+            elif tag == 'h1': self.in_h1 = True
+            elif tag == 'p': self._in_p = True
+            elif tag == 'meta':
+                name = d.get('name', '').lower(); prop = d.get('property', '').lower(); c = d.get('content', '')
+                if name == 'description': self.meta_desc = c
+                elif prop == 'og:description': self.og_desc = c
+                elif prop == 'og:title': self.og_title = c
+
+        def handle_endtag(self, tag):
+            if tag == 'title': self.in_title = False
+            elif tag == 'h1': self.in_h1 = False
+            elif tag == 'p': self._in_p = False
+
+        def handle_data(self, data):
+            s = data.strip()
+            if self.in_title: self.title += s
+            if self.in_h1 and s: self.h1 += s + ' '
+            if self._in_p and len(s) > 20: self.text_blocks.append(s)
+
+    p = PageParser()
+    p.feed(resp.text)
+    product_name = p.og_title or p.h1.strip() or p.title.split('|')[0].strip()
+    description = p.og_desc or p.meta_desc or ' '.join(p.text_blocks[:5])
+    return {'url': url, 'product_name': product_name[:200], 'description': description[:800], 'page_title': p.title[:200]}
+
+
+def suggest_hashtags_for_product(product_info: dict) -> dict:
+    """Use Gemini to suggest TikTok hashtags for a scraped product."""
+    if not GOOGLE_AI_API_KEY:
+        return {'error': 'No Gemini API key configured'}
+
+    import google.generativeai as genai
+    genai.configure(api_key=GOOGLE_AI_API_KEY)
+
+    preferred = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+                 'gemini-1.5-flash', 'gemini-1.5-pro']
+    model_name = None
+    try:
+        available = {m.name.replace('models/', '') for m in genai.list_models()
+                     if 'generateContent' in m.supported_generation_methods}
+        for name in preferred:
+            if name in available:
+                model_name = name
+                break
+        if not model_name:
+            model_name = next(iter(available)) if available else preferred[0]
+    except Exception:
+        model_name = preferred[0]
+
+    model = genai.GenerativeModel(model_name)
+
+    prompt = f"""You are a TikTok trend researcher at a creative AI agency.
+
+A client wants to find trending TikTok content related to this product:
+
+PRODUCT URL: {product_info['url']}
+PRODUCT: {product_info['product_name']}
+DESCRIPTION: {product_info['description'][:500]}
+
+Suggest 8-10 TikTok hashtags to search for relevant trending content. Mix:
+- niche: about this exact product type
+- category: broader product category
+- trend: viral content formats (haul, unboxing, asmr, review, transformation)
+- audience: who buys/loves this type of product
+
+Return ONLY this JSON, no markdown:
+{{
+  "product_name": "clean short product name",
+  "category": "product category in 2-4 words",
+  "hashtags": [
+    {{"tag": "hashtagwithouthash", "type": "niche", "why": "short reason"}},
+    ...
+  ],
+  "search_tip": "1 sentence tip for how to best research this product on TikTok"
+}}"""
+
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith('```'):
+            text = text.split('```')[1]
+            if text.startswith('json'):
+                text = text[4:]
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {'error': 'Could not parse Gemini response', 'raw': response.text[:300]}
+    except Exception as e:
+        return {'error': str(e)}
+
+
 def _default_brief_template() -> str:
     return """# Creative Brief
 
@@ -601,6 +713,21 @@ def transcript():
     if not text:
         return jsonify({'transcript': None, 'message': 'No transcript available for this video'})
     return jsonify({'transcript': text})
+
+@app.route('/api/product-hashtags', methods=['POST'])
+def product_hashtags():
+    data = request.json or {}
+    url = data.get('url', '').strip()
+    if not url or not url.startswith('http'):
+        return jsonify({'error': 'Valid URL required'}), 400
+    try:
+        product_info = scrape_product_page(url)
+        result = suggest_hashtags_for_product(product_info)
+        return jsonify(result)
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Could not fetch URL: {str(e)}'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # Bookmarks
 @app.route('/api/bookmarks', methods=['GET'])
