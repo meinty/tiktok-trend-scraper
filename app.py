@@ -81,46 +81,56 @@ def init_db():
 APIFY_HASHTAG_ACTOR = 'clockworks~tiktok-hashtag-scraper'
 APIFY_COMMENTS_ACTOR = 'clockworks~tiktok-comments-scraper'
 
-def search_tiktok(keyword: str, date_range: str, max_items: int) -> list:
-    if DEMO_MODE:
-        return _mock_videos(keyword, max_items)
-
-    # clockworks~tiktok-hashtag-scraper -- strip # and spaces
+def start_search_run(keyword: str, max_items: int) -> str:
+    """Start an async Apify run, return run_id."""
+    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
     tag = keyword.lstrip('#').replace(' ', '')
-    input_data = {
-        'hashtags': [tag],
-        'maxItems': max_items,
-    }
+    url = f'https://api.apify.com/v2/acts/{APIFY_HASHTAG_ACTOR}/runs'
+    resp = requests.post(
+        url,
+        json={'hashtags': [tag], 'maxItems': max_items},
+        params={'token': token, 'memory': 512},
+        timeout=15
+    )
+    resp.raise_for_status()
+    return resp.json()['data']['id']
 
-    url = f'https://api.apify.com/v2/acts/{APIFY_HASHTAG_ACTOR}/run-sync-get-dataset-items'
-    params = {'token': APIFY_API_TOKEN, 'timeout': 120, 'memory': 512}
-    try:
-        resp = requests.post(url, json=input_data, params=params, timeout=130)
-        resp.raise_for_status()
-        items = resp.json()
-        # Sort by playCount descending
-        items.sort(key=lambda x: x.get('playCount', 0), reverse=True)
-        # Apply date filter client-side if set
-        date_from = _date_from(date_range)
-        if date_from:
-            cutoff = datetime.fromisoformat(date_from)
-            filtered = []
-            for v in items:
-                ts = v.get('createTimeISO', '')
-                if ts:
-                    try:
-                        vdate = datetime.fromisoformat(ts.replace('Z', '+00:00')).replace(tzinfo=None)
-                        if vdate >= cutoff:
-                            filtered.append(v)
-                    except Exception:
+def get_run_status(run_id: str) -> dict:
+    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    r = requests.get(
+        f'https://api.apify.com/v2/actor-runs/{run_id}',
+        params={'token': token}, timeout=10
+    )
+    r.raise_for_status()
+    return r.json()['data']
+
+def get_run_results(run_id: str, date_range: str, max_items: int) -> list:
+    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    ds_id = get_run_status(run_id)['defaultDatasetId']
+    r = requests.get(
+        f'https://api.apify.com/v2/datasets/{ds_id}/items',
+        params={'token': token}, timeout=15
+    )
+    r.raise_for_status()
+    items = r.json()
+    items.sort(key=lambda x: x.get('playCount', 0), reverse=True)
+    date_from = _date_from(date_range)
+    if date_from:
+        cutoff = datetime.fromisoformat(date_from)
+        filtered = []
+        for v in items:
+            ts = v.get('createTimeISO', '')
+            if ts:
+                try:
+                    vdate = datetime.fromisoformat(ts.replace('Z', '+00:00')).replace(tzinfo=None)
+                    if vdate >= cutoff:
                         filtered.append(v)
-                else:
+                except Exception:
                     filtered.append(v)
-            items = filtered
-        return [_normalize_video(v) for v in items[:max_items]]
-    except Exception as e:
-        app.logger.error(f'Apify error: {e}')
-        return []
+            else:
+                filtered.append(v)
+        items = filtered
+    return [_normalize_video(v) for v in items[:max_items]]
 
 def fetch_comments(video_url: str) -> list:
     if DEMO_MODE:
@@ -455,10 +465,13 @@ def index():
 
 @app.route('/api/status')
 def status():
+    apify = bool(os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN))
+    gemini = bool(os.environ.get('GOOGLE_AI_API_KEY', GOOGLE_AI_API_KEY))
     return jsonify({
-        'demo_mode': DEMO_MODE,
-        'gemini_configured': bool(GOOGLE_AI_API_KEY),
-        'apify_configured': bool(APIFY_API_TOKEN),
+        'demo_mode': not apify,
+        'gemini_configured': gemini,
+        'apify_configured': apify,
+        'env_keys': [k for k in os.environ if 'APIFY' in k or 'GOOGLE' in k or 'GEMINI' in k],
     })
 
 @app.route('/api/search', methods=['POST'])
@@ -471,16 +484,44 @@ def search():
     if not keyword:
         return jsonify({'error': 'Keyword required'}), 400
 
-    videos = search_tiktok(keyword, date_range, max_items)
+    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    if not token:
+        videos = _mock_videos(keyword, max_items)
+        db = get_db()
+        db.execute('INSERT INTO recent_searches (keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?)',
+                   (keyword, date_range, max_items, len(videos)))
+        db.commit()
+        return jsonify({'videos': videos, 'demo_mode': True, 'count': len(videos)})
 
-    db = get_db()
-    db.execute(
-        'INSERT INTO recent_searches (keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?)',
-        (keyword, date_range, max_items, len(videos))
-    )
-    db.commit()
+    try:
+        run_id = start_search_run(keyword, max_items)
+        return jsonify({'run_id': run_id, 'keyword': keyword, 'date_range': date_range,
+                        'max_items': max_items, 'status': 'RUNNING'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    return jsonify({'videos': videos, 'demo_mode': DEMO_MODE, 'count': len(videos)})
+@app.route('/api/search/poll/<run_id>', methods=['GET'])
+def poll_search(run_id):
+    keyword = request.args.get('keyword', '')
+    date_range = request.args.get('date_range', 'all')
+    max_items = int(request.args.get('max_items', 20))
+
+    try:
+        run = get_run_status(run_id)
+        status = run['status']
+
+        if status in ('SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'):
+            videos = get_run_results(run_id, date_range, max_items) if status == 'SUCCEEDED' else []
+            if keyword:
+                db = get_db()
+                db.execute('INSERT INTO recent_searches (keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?)',
+                           (keyword, date_range, max_items, len(videos)))
+                db.commit()
+            return jsonify({'status': status, 'videos': videos, 'count': len(videos), 'done': True})
+
+        return jsonify({'status': status, 'done': False})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():

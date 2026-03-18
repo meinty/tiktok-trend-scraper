@@ -814,21 +814,48 @@ async function doSearch() {
       body: JSON.stringify({keyword, date_range: dateRange, max_items: count})
     });
     const data = await r.json();
-    status.classList.remove('visible');
-    renderSearchResults(data.videos || [], keyword);
+
     if (data.demo_mode) {
-      document.getElementById('search-status-text').textContent = 'Demo mode — add APIFY_API_TOKEN for live data';
-      status.classList.add('visible');
-      status.style.background = 'rgba(249,115,22,0.1)';
-      status.style.borderColor = 'rgba(249,115,22,0.2)';
-      status.querySelector('.spinner').style.display = 'none';
+      status.classList.remove('visible');
+      btn.disabled = false; btn.textContent = '⌕ Search';
+      renderSearchResults(data.videos || [], keyword);
+      return;
     }
+
+    if (data.error) throw new Error(data.error);
+
+    // Async run -- poll until done
+    const runId = data.run_id;
+    let dots = 0;
+    const pollInterval = setInterval(async () => {
+      dots = (dots + 1) % 4;
+      document.getElementById('search-status-text').textContent =
+        'Scraping TikTok' + '.'.repeat(dots + 1);
+      try {
+        const pr = await fetch(`/api/search/poll/${runId}?keyword=${encodeURIComponent(keyword)}&date_range=${dateRange}&max_items=${count}`);
+        const pd = await pr.json();
+        if (pd.done) {
+          clearInterval(pollInterval);
+          status.classList.remove('visible');
+          btn.disabled = false;
+          btn.textContent = '⌕ Search';
+          renderSearchResults(pd.videos || [], keyword);
+        }
+      } catch(e) {
+        clearInterval(pollInterval);
+        status.classList.remove('visible');
+        btn.disabled = false;
+        btn.textContent = '⌕ Search';
+        document.getElementById('search-results').innerHTML =
+          `<div class="empty"><div class="empty-icon">!</div><p>Search failed: ${e.message}</p></div>`;
+      }
+    }, 3000);
+    return; // don't reset button yet, polling handles it
+
   } catch(e) {
     status.classList.remove('visible');
+    btn.disabled = false; btn.textContent = '⌕ Search';
     document.getElementById('search-results').innerHTML = `<div class="empty"><div class="empty-icon">!</div><p>Search failed: ${e.message}</p></div>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '⌕ Search';
   }
 }
 
