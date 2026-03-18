@@ -14,8 +14,8 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
 
 app = Flask(__name__)
 
-APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN', '')
-GOOGLE_AI_API_KEY = os.getenv('GOOGLE_AI_API_KEY', '')
+APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN', '').strip().lstrip('=').strip()
+GOOGLE_AI_API_KEY = os.getenv('GOOGLE_AI_API_KEY', '').strip()
 # On Railway/cloud: use /tmp or RAILWAY_VOLUME_MOUNT_PATH if set
 _data_dir = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(__file__))
 DB_PATH = os.path.join(_data_dir, 'tiktok_scraper.db')
@@ -81,9 +81,12 @@ def init_db():
 APIFY_HASHTAG_ACTOR = 'clockworks~tiktok-hashtag-scraper'
 APIFY_COMMENTS_ACTOR = 'clockworks~tiktok-comments-scraper'
 
+def _get_token() -> str:
+    return os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN).strip().lstrip('=').strip()
+
 def start_search_run(keyword: str, max_items: int) -> str:
     """Start an async Apify run, return run_id."""
-    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    token = _get_token()
     tag = keyword.lstrip('#').replace(' ', '')
     url = f'https://api.apify.com/v2/acts/{APIFY_HASHTAG_ACTOR}/runs'
     resp = requests.post(
@@ -96,7 +99,7 @@ def start_search_run(keyword: str, max_items: int) -> str:
     return resp.json()['data']['id']
 
 def get_run_status(run_id: str) -> dict:
-    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    token = _get_token()
     r = requests.get(
         f'https://api.apify.com/v2/actor-runs/{run_id}',
         params={'token': token}, timeout=10
@@ -105,7 +108,7 @@ def get_run_status(run_id: str) -> dict:
     return r.json()['data']
 
 def get_run_results(run_id: str, date_range: str, max_items: int) -> list:
-    token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
+    token = _get_token()
     ds_id = get_run_status(run_id)['defaultDatasetId']
     r = requests.get(
         f'https://api.apify.com/v2/datasets/{ds_id}/items',
