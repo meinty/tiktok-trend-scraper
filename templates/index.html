@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TikTok Trend Scraper</title>
+<style>
+  :root {
+    --bg: #050505;
+    --surface: rgba(255,255,255,0.04);
+    --surface-hover: rgba(255,255,255,0.08);
+    --border: rgba(255,255,255,0.08);
+    --accent: #fe2c55;
+    --accent2: #69c9d0;
+    --text: #f0f0f0;
+    --text-muted: #888;
+    --text-dim: #555;
+    --radius: 12px;
+    --transition: 0.2s ease;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+
+  /* LAYOUT */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.6);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 24px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .sidebar-logo {
+    padding: 0 20px 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .sidebar-logo span:first-child { font-size: 20px; font-weight: 800; color: var(--accent); }
+  .sidebar-logo span:last-child { font-size: 11px; color: var(--text-muted); display: block; margin-top: 2px; }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 0;
+    transition: var(--transition);
+    border-left: 2px solid transparent;
+  }
+  .nav-item:hover { color: var(--text); background: var(--surface); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(254,44,85,0.06); }
+  .nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+  .nav-bottom { margin-top: auto; padding: 16px 20px; border-top: 1px solid var(--border); }
+  .demo-badge {
+    background: rgba(254,44,85,0.15);
+    border: 1px solid rgba(254,44,85,0.3);
+    color: var(--accent);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .main { flex: 1; overflow-x: hidden; }
+
+  /* VIEWS */
+  .view { display: none; padding: 32px; max-width: 1200px; }
+  .view.active { display: block; }
+
+  /* PAGE HEADER */
+  .page-header { margin-bottom: 28px; }
+  .page-header h1 { font-size: 24px; font-weight: 700; }
+  .page-header p { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+
+  /* SEARCH BAR */
+  .search-form {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .input, .select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 10px 14px;
+    font-size: 14px;
+    outline: none;
+    transition: var(--transition);
+  }
+  .input:focus, .select:focus { border-color: var(--accent); background: rgba(254,44,85,0.06); }
+  .input.large { width: 320px; }
+  .select option { background: #1a1a1a; }
+  .btn {
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #e01f45; transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--surface-hover); }
+  .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
+  .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+  /* SEARCH STATUS */
+  .search-status {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: rgba(105,201,208,0.1);
+    border: 1px solid rgba(105,201,208,0.2);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+    font-size: 13px;
+    color: var(--accent2);
+  }
+  .search-status.visible { display: flex; }
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(105,201,208,0.3);
+    border-top-color: var(--accent2);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* VIDEO GRID */
+  .video-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+  .video-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+  }
+  .video-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+  .video-cover {
+    width: 100%;
+    aspect-ratio: 9/16;
+    object-fit: cover;
+    background: #111;
+    display: block;
+  }
+  .video-cover-placeholder {
+    width: 100%;
+    aspect-ratio: 9/16;
+    background: linear-gradient(135deg, #111 0%, #1a1a2e 50%, #111 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    color: var(--text-dim);
+  }
+  .video-info { padding: 12px; }
+  .video-author { font-size: 12px; color: var(--accent2); font-weight: 600; margin-bottom: 4px; }
+  .video-caption { font-size: 11px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 8px; }
+  .video-stats { display: flex; gap: 10px; }
+  .stat { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 3px; }
+  .stat .s-icon { font-size: 10px; }
+  .bookmark-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(254,44,85,0.9);
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  /* VIDEO MODAL */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    width: 100%;
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+  }
+  .modal-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .modal-close:hover { color: var(--text); background: var(--surface-hover); }
+  .modal-layout { display: flex; gap: 24px; padding: 24px; }
+  .modal-cover-col { flex-shrink: 0; width: 200px; }
+  .modal-cover {
+    width: 200px;
+    aspect-ratio: 9/16;
+    object-fit: cover;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+  .modal-cover:hover { opacity: 0.8; }
+  .modal-cover-placeholder {
+    width: 200px;
+    aspect-ratio: 9/16;
+    background: linear-gradient(135deg, #111 0%, #1a1a2e 50%, #111 100%);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 48px;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .open-tiktok-hint { font-size: 11px; color: var(--text-dim); text-align: center; margin-top: 6px; }
+  .modal-info-col { flex: 1; }
+  .modal-author { font-size: 14px; color: var(--accent2); font-weight: 700; margin-bottom: 6px; }
+  .modal-caption { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; }
+  .modal-stats-row { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .modal-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; text-align: center; }
+  .modal-stat-val { font-size: 16px; font-weight: 700; color: var(--text); }
+  .modal-stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; margin-top: 2px; }
+  .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+
+  /* ANALYSIS PANEL */
+  .analysis-panel { margin-top: 8px; }
+  .analysis-loading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .analysis-result {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .analysis-section { margin-bottom: 16px; }
+  .analysis-section:last-child { margin-bottom: 0; }
+  .analysis-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .analysis-value { font-size: 13px; color: var(--text); line-height: 1.5; }
+  .analysis-badge {
+    display: inline-block;
+    background: rgba(105,201,208,0.15);
+    border: 1px solid rgba(105,201,208,0.3);
+    color: var(--accent2);
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .analysis-badge.red {
+    background: rgba(254,44,85,0.15);
+    border-color: rgba(254,44,85,0.3);
+    color: var(--accent);
+  }
+  .analysis-list { list-style: none; }
+  .analysis-list li { padding: 4px 0; font-size: 13px; color: var(--text-muted); display: flex; gap: 8px; }
+  .analysis-list li::before { content: '•'; color: var(--accent2); flex-shrink: 0; }
+
+  .transcript-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.7;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  /* HOME VIEW */
+  .home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .home-section { }
+  .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .section-header h2 { font-size: 16px; font-weight: 700; }
+  .search-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: var(--transition);
+    margin-bottom: 8px;
+  }
+  .search-card:hover { background: var(--surface-hover); border-color: rgba(255,255,255,0.12); }
+  .search-card-keyword { font-size: 14px; font-weight: 600; }
+  .search-card-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .search-card-right { display: flex; align-items: center; gap: 8px; }
+  .search-card-count { font-size: 12px; color: var(--text-muted); }
+  .delete-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+  .delete-btn:hover { color: var(--accent); background: rgba(254,44,85,0.1); }
+
+  .bookmark-mini {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex;
+    gap: 12px;
+    cursor: pointer;
+    transition: var(--transition);
+    margin-bottom: 8px;
+  }
+  .bookmark-mini:hover { background: var(--surface-hover); }
+  .bookmark-mini-cover { width: 48px; height: 64px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: #1a1a1a; }
+  .bookmark-mini-info { flex: 1; min-width: 0; }
+  .bookmark-mini-author { font-size: 12px; color: var(--accent2); font-weight: 600; }
+  .bookmark-mini-caption { font-size: 11px; color: var(--text-muted); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* BRIEFS VIEW */
+  .brief-list { display: flex; flex-direction: column; gap: 12px; }
+  .brief-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+  .brief-card:hover { background: var(--surface-hover); }
+  .brief-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .brief-card-title { font-size: 14px; font-weight: 700; }
+  .brief-card-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .brief-card-preview { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* BRIEF MODAL */
+  .brief-modal-content { padding: 28px; }
+  .brief-modal-header { margin-bottom: 20px; }
+  .brief-modal-header h2 { font-size: 18px; font-weight: 700; }
+  .brief-body { font-size: 13px; line-height: 1.8; color: var(--text-muted); white-space: pre-wrap; }
+  .brief-body strong { color: var(--text); }
+
+  /* SETTINGS VIEW */
+  .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+  .settings-section h2 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .settings-section p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+  .project-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .project-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .project-card-name { font-size: 14px; font-weight: 700; }
+  .project-actions { display: flex; gap: 8px; }
+  .textarea {
+    width: 100%;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+    transition: var(--transition);
+    line-height: 1.6;
+  }
+  .textarea:focus { border-color: var(--accent); }
+  .form-row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; }
+
+  /* GENERATE BRIEF MODAL */
+  .brief-gen-modal { max-width: 420px; padding: 28px; }
+  .brief-gen-modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+  .brief-gen-modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+  .project-select-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+  .project-select-item {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .project-select-item:hover { border-color: var(--accent); background: rgba(254,44,85,0.06); }
+  .project-select-item.selected { border-color: var(--accent); background: rgba(254,44,85,0.1); }
+  .project-select-item span { font-size: 11px; color: var(--text-muted); display: block; font-weight: 400; margin-top: 2px; }
+
+  /* STATUS CONFIG */
+  .config-row { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+  .config-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .config-dot.green { background: #22c55e; }
+  .config-dot.red { background: var(--accent); }
+  .config-dot.orange { background: #f97316; }
+  .config-text { font-size: 13px; color: var(--text-muted); }
+  .config-code { font-family: monospace; font-size: 11px; background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; color: var(--accent2); }
+
+  /* EMPTY STATE */
+  .empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+  .empty .empty-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty p { font-size: 14px; }
+
+  /* UTILS */
+  .text-muted { color: var(--text-muted); }
+  .text-accent { color: var(--accent); }
+  .text-accent2 { color: var(--accent2); }
+  .mt-8 { margin-top: 8px; }
+  .mt-16 { margin-top: 16px; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span>TikTok Trends</span>
+      <span>JACK Intelligence Tool</span>
+    </div>
+    <div class="nav-item active" onclick="showView('home')">
+      <span class="icon">⌂</span> Home
+    </div>
+    <div class="nav-item" onclick="showView('search')">
+      <span class="icon">⌕</span> Search
+    </div>
+    <div class="nav-item" onclick="showView('bookmarks')">
+      <span class="icon">♥</span> Bookmarks
+    </div>
+    <div class="nav-item" onclick="showView('briefs')">
+      <span class="icon">✎</span> Briefs
+    </div>
+    <div class="nav-item" onclick="showView('settings')">
+      <span class="icon">⚙</span> Settings
+    </div>
+    <div class="nav-bottom">
+      <div class="demo-badge" id="mode-badge">
+        <span id="mode-dot">●</span>
+        <span id="mode-text">Checking...</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- HOME VIEW -->
+    <div class="view active" id="view-home">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <p>Recent searches and saved videos</p>
+      </div>
+      <div class="home-grid">
+        <div class="home-section">
+          <div class="section-header">
+            <h2>Recent Searches</h2>
+            <button class="btn btn-ghost btn-sm" onclick="showView('search')">New search</button>
+          </div>
+          <div id="home-searches">
+            <div class="empty"><div class="empty-icon">⌕</div><p>No recent searches</p></div>
+          </div>
+        </div>
+        <div class="home-section">
+          <div class="section-header">
+            <h2>Bookmarks</h2>
+            <button class="btn btn-ghost btn-sm" onclick="showView('bookmarks')">View all</button>
+          </div>
+          <div id="home-bookmarks">
+            <div class="empty"><div class="empty-icon">♥</div><p>No bookmarks yet</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEARCH VIEW -->
+    <div class="view" id="view-search">
+      <div class="page-header">
+        <h1>Search TikTok</h1>
+        <p>Find trending videos in any niche</p>
+      </div>
+      <div class="search-form">
+        <div class="form-group">
+          <label>Keyword</label>
+          <input type="text" class="input large" id="search-keyword" placeholder="e.g. skincare routine, weighted vest..." onkeydown="if(event.key==='Enter') doSearch()">
+        </div>
+        <div class="form-group">
+          <label>Date Range</label>
+          <select class="select" id="search-date">
+            <option value="all">All time</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="180">Last 180 days</option>
+            <option value="365">Last year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Videos</label>
+          <select class="select" id="search-count">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="30">30</option>
+            <option value="50">50</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="search-btn" onclick="doSearch()">
+          ⌕ Search
+        </button>
+      </div>
+      <div class="search-status" id="search-status">
+        <div class="spinner"></div>
+        <span id="search-status-text">Scraping TikTok...</span>
+      </div>
+      <div id="search-results">
+        <div class="empty"><div class="empty-icon">⌕</div><p>Enter a keyword to find trending videos</p></div>
+      </div>
+    </div>
+
+    <!-- BOOKMARKS VIEW -->
+    <div class="view" id="view-bookmarks">
+      <div class="page-header">
+        <h1>Bookmarks</h1>
+        <p>Videos you saved for later</p>
+      </div>
+      <div id="bookmarks-grid" class="video-grid">
+        <div class="empty"><div class="empty-icon">♥</div><p>No bookmarks yet</p></div>
+      </div>
+    </div>
+
+    <!-- BRIEFS VIEW -->
+    <div class="view" id="view-briefs">
+      <div class="page-header">
+        <h1>Creative Briefs</h1>
+        <p>AI-generated briefs from TikTok research</p>
+      </div>
+      <div id="briefs-list" class="brief-list">
+        <div class="empty"><div class="empty-icon">✎</div><p>No briefs yet. Analyze a video and generate a brief.</p></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div class="view" id="view-settings">
+      <div class="page-header">
+        <h1>Settings</h1>
+        <p>Configure API keys and manage projects</p>
+      </div>
+
+      <div class="settings-section">
+        <h2>API Configuration</h2>
+        <p>Configure these in your <span class="config-code">.env</span> file</p>
+        <div class="config-row">
+          <div class="config-dot" id="apify-dot"></div>
+          <span class="config-text"><strong>APIFY_API_TOKEN</strong> — TikTok scraper <span id="apify-status"></span></span>
+        </div>
+        <div class="config-row">
+          <div class="config-dot" id="gemini-dot"></div>
+          <span class="config-text"><strong>GOOGLE_AI_API_KEY</strong> — AI analysis <span id="gemini-status"></span></span>
+        </div>
+        <p class="mt-8" style="font-size:12px; color: var(--text-dim)">Add <span class="config-code">APIFY_API_TOKEN=your_key</span> to <span class="config-code">tools/tiktok_scraper/.env</span> or the PA root <span class="config-code">.env</span></p>
+      </div>
+
+      <div class="settings-section">
+        <h2>Projects / Clients</h2>
+        <p>Create a project per client to generate tailored creative briefs</p>
+        <div class="form-row">
+          <div class="form-group" style="flex:1">
+            <label>Project name</label>
+            <input type="text" class="input" id="new-project-name" placeholder="e.g. Alpro, Action, Gall & Gall">
+          </div>
+          <button class="btn btn-primary" onclick="createProject()">Create</button>
+        </div>
+        <div id="projects-list"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- VIDEO DETAIL MODAL -->
+<div class="modal-overlay" id="video-modal" onclick="if(event.target===this) closeModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-layout">
+      <div class="modal-cover-col">
+        <div id="modal-cover-wrap"></div>
+        <p class="open-tiktok-hint">Click to open on TikTok</p>
+      </div>
+      <div class="modal-info-col">
+        <div class="modal-author" id="modal-author"></div>
+        <div class="modal-caption" id="modal-caption"></div>
+        <div class="modal-stats-row" id="modal-stats"></div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary btn-sm" onclick="getTranscript()">⟿ Transcript</button>
+          <button class="btn btn-primary btn-sm" id="analyze-btn" onclick="analyzeVideo()">✦ Analyze</button>
+          <button class="btn btn-ghost btn-sm" id="bookmark-btn" onclick="toggleBookmark()">♥ Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="openBriefGen()">✎ Generate Brief</button>
+        </div>
+        <div id="transcript-wrap" style="display:none; margin-bottom:12px;">
+          <div class="analysis-label">Transcript</div>
+          <div class="transcript-panel" id="transcript-text"></div>
+        </div>
+        <div class="analysis-panel" id="analysis-panel"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BRIEF DETAIL MODAL -->
+<div class="modal-overlay" id="brief-modal" onclick="if(event.target===this) closeBriefModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeBriefModal()">✕</button>
+    <div class="brief-modal-content">
+      <div class="brief-modal-header">
+        <h2 id="brief-modal-title"></h2>
+        <div id="brief-modal-meta" class="text-muted" style="font-size:12px; margin-top:4px;"></div>
+      </div>
+      <hr class="divider">
+      <div class="brief-body" id="brief-modal-body"></div>
+    </div>
+  </div>
+</div>
+
+<!-- GENERATE BRIEF MODAL -->
+<div class="modal-overlay" id="brief-gen-modal" onclick="if(event.target===this) closeBriefGen()">
+  <div class="modal" style="max-width:420px">
+    <button class="modal-close" onclick="closeBriefGen()">✕</button>
+    <div class="brief-gen-modal">
+      <h2>Generate Creative Brief</h2>
+      <p>Select a client to generate a brief based on this video</p>
+      <div id="brief-gen-projects" class="project-select-list"></div>
+      <button class="btn btn-primary" style="width:100%" id="gen-brief-btn" onclick="generateBrief()">
+        ✦ Generate Brief
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let currentVideo = null;
+let currentAnalysis = null;
+let selectedProjectId = null;
+let bookmarkedIds = new Set();
+const videoCache = new Map(); // id -> video object, avoids onclick JSON encoding issues
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+async function init() {
+  await loadStatus();
+  loadHome();
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
+    const dot = document.getElementById('mode-dot');
+    const text = document.getElementById('mode-text');
+    const apifyDot = document.getElementById('apify-dot');
+    const geminiDot = document.getElementById('gemini-dot');
+    if (s.demo_mode) {
+      dot.style.color = '#f97316';
+      text.textContent = 'Demo mode';
+    } else {
+      dot.style.color = '#22c55e';
+      text.textContent = 'Live mode';
+    }
+    apifyDot.className = 'config-dot ' + (s.apify_configured ? 'green' : 'red');
+    document.getElementById('apify-status').textContent = s.apify_configured ? '(connected)' : '(not set — demo mode active)';
+    geminiDot.className = 'config-dot ' + (s.gemini_configured ? 'green' : 'red');
+    document.getElementById('gemini-status').textContent = s.gemini_configured ? '(connected)' : '(not set)';
+  } catch(e) {}
+}
+
+// ─── NAVIGATION ──────────────────────────────────────────────────────────────
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.textContent.trim().toLowerCase().includes(name)) n.classList.add('active');
+  });
+  if (name === 'home') loadHome();
+  if (name === 'bookmarks') loadBookmarks();
+  if (name === 'briefs') loadBriefs();
+  if (name === 'settings') loadProjects();
+}
+
+// ─── HOME ────────────────────────────────────────────────────────────────────
+async function loadHome() {
+  const [searchRes, bookmarkRes] = await Promise.all([
+    fetch('/api/recent-searches').then(r => r.json()),
+    fetch('/api/bookmarks').then(r => r.json()),
+  ]);
+
+  // Recent searches
+  const searchWrap = document.getElementById('home-searches');
+  if (!searchRes.length) {
+    searchWrap.innerHTML = '<div class="empty"><div class="empty-icon">⌕</div><p>No recent searches</p></div>';
+  } else {
+    searchWrap.innerHTML = searchRes.slice(0, 6).map(s => `
+      <div class="search-card"
+        data-keyword="${escHtml(s.keyword)}"
+        data-range="${escHtml(s.date_range || 'all')}"
+        data-count="${s.video_count || 20}"
+        onclick="repeatSearch(this.dataset.keyword, this.dataset.range, this.dataset.count)">
+        <div>
+          <div class="search-card-keyword">${escHtml(s.keyword)}</div>
+          <div class="search-card-meta">${formatDate(s.created_at)} · ${s.result_count || 0} videos</div>
+        </div>
+        <div class="search-card-right">
+          <span class="search-card-count">${s.date_range === 'all' ? 'All time' : 'Last ' + s.date_range + 'd'}</span>
+          <button class="delete-btn" onclick="event.stopPropagation(); deleteSearch(${s.id})" title="Remove">✕</button>
+        </div>
+      </div>`).join('');
+  }
+
+  // Bookmarks
+  const bmWrap = document.getElementById('home-bookmarks');
+  if (!bookmarkRes.length) {
+    bmWrap.innerHTML = '<div class="empty"><div class="empty-icon">♥</div><p>No bookmarks yet</p></div>';
+  } else {
+    bookmarkRes.forEach(b => videoCache.set(b.video_id, b.video_data));
+    bmWrap.innerHTML = bookmarkRes.slice(0, 4).map(b => {
+      const v = b.video_data;
+      return `<div class="bookmark-mini" data-video-id="${escHtml(v.id)}" onclick="openVideoById(this.dataset.videoId)">
+        ${v.cover ? `<img class="bookmark-mini-cover" src="${escHtml(v.cover)}" onerror="this.style.background='#1a1a1a'; this.removeAttribute('src')">` : '<div class="bookmark-mini-cover"></div>'}
+        <div class="bookmark-mini-info">
+          <div class="bookmark-mini-author">@${escHtml(v.author)}</div>
+          <div class="bookmark-mini-caption">${escHtml(v.caption)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ─── SEARCH ──────────────────────────────────────────────────────────────────
+async function doSearch() {
+  const keyword = document.getElementById('search-keyword').value.trim();
+  if (!keyword) return;
+  const dateRange = document.getElementById('search-date').value;
+  const count = parseInt(document.getElementById('search-count').value);
+
+  const btn = document.getElementById('search-btn');
+  const status = document.getElementById('search-status');
+  btn.disabled = true;
+  btn.textContent = '... Searching';
+  status.classList.add('visible');
+  document.getElementById('search-status-text').textContent = `Searching TikTok for "${keyword}"...`;
+
+  try {
+    const r = await fetch('/api/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keyword, date_range: dateRange, max_items: count})
+    });
+    const data = await r.json();
+    status.classList.remove('visible');
+    renderSearchResults(data.videos || [], keyword);
+    if (data.demo_mode) {
+      document.getElementById('search-status-text').textContent = 'Demo mode — add APIFY_API_TOKEN for live data';
+      status.classList.add('visible');
+      status.style.background = 'rgba(249,115,22,0.1)';
+      status.style.borderColor = 'rgba(249,115,22,0.2)';
+      status.querySelector('.spinner').style.display = 'none';
+    }
+  } catch(e) {
+    status.classList.remove('visible');
+    document.getElementById('search-results').innerHTML = `<div class="empty"><div class="empty-icon">!</div><p>Search failed: ${e.message}</p></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⌕ Search';
+  }
+}
+
+function repeatSearch(keyword, dateRange, count) {
+  showView('search');
+  document.getElementById('search-keyword').value = keyword;
+  document.getElementById('search-date').value = dateRange || 'all';
+  document.getElementById('search-count').value = count || 20;
+  doSearch();
+}
+
+function renderSearchResults(videos, keyword) {
+  const el = document.getElementById('search-results');
+  if (!videos.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><p>No results for "${escHtml(keyword)}"</p></div>`;
+    return;
+  }
+  videos.forEach(v => videoCache.set(v.id, v));
+  el.innerHTML = `<p style="font-size:13px; color:var(--text-muted); margin-bottom:16px">${videos.length} videos found for <strong style="color:var(--text)">"${escHtml(keyword)}"</strong></p>
+  <div class="video-grid">${videos.map(v => videoCardHTML(v)).join('')}</div>`;
+}
+
+function videoCardHTML(v) {
+  const isBookmarked = bookmarkedIds.has(v.id);
+  // Use data-video-id to avoid JSON/quote issues in onclick attributes
+  return `<div class="video-card" data-video-id="${escHtml(v.id)}" onclick="openVideoById(this.dataset.videoId)">
+    ${isBookmarked ? '<div class="bookmark-indicator">♥</div>' : ''}
+    ${v.cover ? `<img class="video-cover" src="${escHtml(v.cover)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
+    <div class="video-cover-placeholder" style="display:none">▶</div>` :
+    '<div class="video-cover-placeholder">▶</div>'}
+    <div class="video-info">
+      <div class="video-author">@${escHtml(v.author)}</div>
+      <div class="video-caption">${escHtml(v.caption)}</div>
+      <div class="video-stats">
+        <span class="stat"><span class="s-icon">▶</span>${formatNum(v.views)}</span>
+        <span class="stat"><span class="s-icon">♥</span>${formatNum(v.likes)}</span>
+        <span class="stat"><span class="s-icon">💬</span>${formatNum(v.comments)}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openVideoById(id) {
+  const v = videoCache.get(id);
+  if (v) openVideo(v);
+}
+
+// ─── BOOKMARKS ───────────────────────────────────────────────────────────────
+async function loadBookmarks() {
+  const bookmarks = await fetch('/api/bookmarks').then(r => r.json());
+  bookmarkedIds = new Set(bookmarks.map(b => b.video_id));
+  bookmarks.forEach(b => videoCache.set(b.video_id, b.video_data));
+  const el = document.getElementById('bookmarks-grid');
+  if (!bookmarks.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">♥</div><p>No bookmarks yet</p></div>';
+    return;
+  }
+  el.innerHTML = bookmarks.map(b => videoCardHTML(b.video_data)).join('');
+}
+
+// ─── VIDEO MODAL ─────────────────────────────────────────────────────────────
+async function openVideo(videoOrJson) {
+  currentVideo = typeof videoOrJson === 'string' ? JSON.parse(videoOrJson) : videoOrJson;
+  if (currentVideo) videoCache.set(currentVideo.id, currentVideo);
+  currentAnalysis = null;
+
+  const v = currentVideo;
+
+  // Cover -- use a named function to avoid URL/quote issues in onclick
+  const coverWrap = document.getElementById('modal-cover-wrap');
+  if (v.cover) {
+    const img = document.createElement('img');
+    img.className = 'modal-cover';
+    img.src = v.cover;
+    img.onclick = () => v.tiktok_url && window.open(v.tiktok_url, '_blank');
+    img.onerror = () => {
+      const ph = document.createElement('div');
+      ph.className = 'modal-cover-placeholder';
+      ph.textContent = '▶';
+      ph.onclick = () => v.tiktok_url && window.open(v.tiktok_url, '_blank');
+      img.replaceWith(ph);
+    };
+    coverWrap.innerHTML = '';
+    coverWrap.appendChild(img);
+  } else {
+    coverWrap.innerHTML = `<div class="modal-cover-placeholder">▶</div>`;
+    coverWrap.firstChild.onclick = () => v.tiktok_url && window.open(v.tiktok_url, '_blank');
+  }
+
+  document.getElementById('modal-author').textContent = '@' + v.author;
+  document.getElementById('modal-caption').textContent = v.caption;
+  document.getElementById('modal-stats').innerHTML = [
+    {val: formatNum(v.views), label: 'Views'},
+    {val: formatNum(v.likes), label: 'Likes'},
+    {val: formatNum(v.comments), label: 'Comments'},
+    {val: formatNum(v.bookmarks), label: 'Bookmarks'},
+  ].map(s => `<div class="modal-stat"><div class="modal-stat-val">${s.val}</div><div class="modal-stat-label">${s.label}</div></div>`).join('');
+
+  // Bookmark state
+  const bBtn = document.getElementById('bookmark-btn');
+  const isBookmarked = bookmarkedIds.has(v.id);
+  bBtn.textContent = isBookmarked ? '♥ Saved' : '♥ Save';
+  bBtn.style.color = isBookmarked ? 'var(--accent)' : '';
+
+  // Reset panels
+  document.getElementById('analysis-panel').innerHTML = '';
+  document.getElementById('transcript-wrap').style.display = 'none';
+  document.getElementById('analyze-btn').textContent = '✦ Analyze';
+
+  document.getElementById('video-modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('video-modal').classList.remove('open');
+  currentVideo = null;
+}
+
+async function toggleBookmark() {
+  if (!currentVideo) return;
+  const v = currentVideo;
+  const isBookmarked = bookmarkedIds.has(v.id);
+  const btn = document.getElementById('bookmark-btn');
+
+  if (isBookmarked) {
+    await fetch(`/api/bookmarks/${v.id}`, {method: 'DELETE'});
+    bookmarkedIds.delete(v.id);
+    btn.textContent = '♥ Save';
+    btn.style.color = '';
+  } else {
+    const r = await fetch('/api/bookmarks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({video: v})
+    });
+    if (r.ok) {
+      bookmarkedIds.add(v.id);
+      btn.textContent = '♥ Saved';
+      btn.style.color = 'var(--accent)';
+    }
+  }
+}
+
+async function getTranscript() {
+  if (!currentVideo) return;
+  const wrap = document.getElementById('transcript-wrap');
+  const textEl = document.getElementById('transcript-text');
+
+  wrap.style.display = 'block';
+  textEl.textContent = 'Loading transcript...';
+
+  const r = await fetch('/api/transcript', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({subtitles: currentVideo.subtitles || [], transcription_url: currentVideo.transcription_url || ''})
+  });
+  const data = await r.json();
+  textEl.textContent = data.transcript || data.message || 'No transcript available';
+}
+
+async function analyzeVideo() {
+  if (!currentVideo) return;
+  const panel = document.getElementById('analysis-panel');
+  const btn = document.getElementById('analyze-btn');
+
+  btn.disabled = true;
+  btn.textContent = '... Analyzing';
+  panel.innerHTML = '<div class="analysis-loading"><div class="spinner"></div> Gemini is analyzing the video...</div>';
+
+  try {
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({video: currentVideo})
+    });
+    const analysis = await r.json();
+    currentAnalysis = analysis;
+    renderAnalysis(analysis, panel);
+  } catch(e) {
+    panel.innerHTML = `<div class="analysis-result"><p style="color:var(--accent)">Analysis failed: ${e.message}</p></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Re-analyze';
+  }
+}
+
+function renderAnalysis(a, panel) {
+  if (a.error) {
+    panel.innerHTML = `<div class="analysis-result"><p style="color:var(--accent)">Error: ${escHtml(a.error)}</p></div>`;
+    return;
+  }
+
+  const questions = (a.common_questions || []).map(q => `<li>${escHtml(q)}</li>`).join('');
+  const insights = (a.key_insights || []).map(i => `<li>${escHtml(i)}</li>`).join('');
+
+  panel.innerHTML = `<div class="analysis-result">
+    <div class="analysis-section">
+      <div class="analysis-label">AI Analysis</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <span class="analysis-badge red">${escHtml(a.theme || '')}</span>
+        <span class="analysis-badge">${escHtml(a.funnel_stage || '')}</span>
+        ${a.hook_formula ? `<span class="analysis-badge">${escHtml(a.hook_formula)}</span>` : ''}
+      </div>
+    </div>
+    <div class="analysis-section">
+      <div class="analysis-label">Visual Hook</div>
+      <div class="analysis-value">${escHtml(a.visual_hook || '')}</div>
+    </div>
+    <div class="analysis-section">
+      <div class="analysis-label">Undeniable Proof</div>
+      <div class="analysis-value">${escHtml(a.undeniable_proof || '')}</div>
+    </div>
+    ${a.why_it_works ? `<div class="analysis-section">
+      <div class="analysis-label">Why it works</div>
+      <div class="analysis-value">${escHtml(a.why_it_works)}</div>
+    </div>` : ''}
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+      <div class="analysis-section">
+        <div class="analysis-label">Common Questions</div>
+        <ul class="analysis-list">${questions}</ul>
+      </div>
+      <div class="analysis-section">
+        <div class="analysis-label">Key Insights</div>
+        <ul class="analysis-list">${insights}</ul>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── BRIEF GENERATION ────────────────────────────────────────────────────────
+async function openBriefGen() {
+  selectedProjectId = null;
+  const projects = await fetch('/api/projects').then(r => r.json());
+  const list = document.getElementById('brief-gen-projects');
+
+  if (!projects.length) {
+    list.innerHTML = '<p style="color:var(--text-muted); font-size:13px">No projects yet. Create a project in Settings first.</p>';
+    document.getElementById('gen-brief-btn').disabled = true;
+  } else {
+    document.getElementById('gen-brief-btn').disabled = false;
+    list.innerHTML = projects.map(p => `
+      <div class="project-select-item" onclick="selectProject(${p.id}, this)" data-id="${p.id}">
+        ${escHtml(p.name)}
+        <span>${p.brief_template ? 'Has brief template' : 'No template'} · ${p.brand_bible ? 'Has brand bible' : 'No brand bible'}</span>
+      </div>`).join('');
+  }
+
+  document.getElementById('brief-gen-modal').classList.add('open');
+}
+
+function closeBriefGen() {
+  document.getElementById('brief-gen-modal').classList.remove('open');
+}
+
+function selectProject(id, el) {
+  selectedProjectId = id;
+  document.querySelectorAll('.project-select-item').forEach(i => i.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+async function generateBrief() {
+  if (!selectedProjectId || !currentVideo) return;
+  const btn = document.getElementById('gen-brief-btn');
+  btn.disabled = true;
+  btn.textContent = '... Generating';
+
+  try {
+    const r = await fetch('/api/briefs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({video: currentVideo, project_id: selectedProjectId, analysis: currentAnalysis})
+    });
+    const brief = await r.json();
+    closeBriefGen();
+    closeModal();
+    showView('briefs');
+    loadBriefs();
+    openBriefModal(brief);
+  } catch(e) {
+    alert('Brief generation failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✦ Generate Brief';
+  }
+}
+
+// ─── BRIEFS VIEW ─────────────────────────────────────────────────────────────
+async function loadBriefs() {
+  const briefs = await fetch('/api/briefs').then(r => r.json());
+  const el = document.getElementById('briefs-list');
+  if (!briefs.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">✎</div><p>No briefs yet. Analyze a video and generate a brief.</p></div>';
+    return;
+  }
+  el.innerHTML = briefs.map(b => `
+    <div class="brief-card" onclick="loadAndOpenBrief(${b.id})">
+      <div class="brief-card-header">
+        <div>
+          <div class="brief-card-title">${escHtml(b.project_name)} — Brief</div>
+          <div class="brief-card-meta">${formatDate(b.created_at)}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteBrief(${b.id})">Delete</button>
+      </div>
+      <div class="brief-card-preview">${escHtml((b.brief_content || '').substring(0, 200))}</div>
+    </div>`).join('');
+}
+
+async function loadAndOpenBrief(id) {
+  const brief = await fetch(`/api/briefs/${id}`).then(r => r.json());
+  openBriefModal(brief);
+}
+
+function openBriefModal(brief) {
+  document.getElementById('brief-modal-title').textContent = brief.project_name + ' — Creative Brief';
+  document.getElementById('brief-modal-meta').textContent = formatDate(brief.created_at) + (brief.video_url ? ' · ' + brief.video_url : '');
+  document.getElementById('brief-modal-body').textContent = brief.brief_content || '';
+  document.getElementById('brief-modal').classList.add('open');
+}
+
+function closeBriefModal() {
+  document.getElementById('brief-modal').classList.remove('open');
+}
+
+async function deleteBrief(id) {
+  if (!confirm('Delete this brief?')) return;
+  await fetch(`/api/briefs/${id}`, {method: 'DELETE'});
+  loadBriefs();
+}
+
+// ─── RECENT SEARCHES ─────────────────────────────────────────────────────────
+async function deleteSearch(id) {
+  await fetch(`/api/recent-searches/${id}`, {method: 'DELETE'});
+  loadHome();
+}
+
+// ─── PROJECTS ────────────────────────────────────────────────────────────────
+async function loadProjects() {
+  const projects = await fetch('/api/projects').then(r => r.json());
+  const el = document.getElementById('projects-list');
+  if (!projects.length) {
+    el.innerHTML = '<p style="color:var(--text-muted); font-size:13px">No projects yet.</p>';
+    return;
+  }
+  el.innerHTML = projects.map(p => `
+    <div class="project-card" id="project-${p.id}">
+      <div class="project-card-header">
+        <div class="project-card-name">${escHtml(p.name)}</div>
+        <div class="project-actions">
+          <button class="btn btn-ghost btn-sm" onclick="deleteProject(${p.id})">Delete</button>
+        </div>
+      </div>
+      <div class="form-group mt-8" style="margin-bottom:10px">
+        <label>Brief Template</label>
+        <textarea class="textarea" rows="4" id="template-${p.id}" placeholder="Paste your brief template here...">${escHtml(p.brief_template || '')}</textarea>
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label>Brand Bible</label>
+        <textarea class="textarea" rows="4" id="bible-${p.id}" placeholder="Paste brand guidelines, tone of voice, target audience...">${escHtml(p.brand_bible || '')}</textarea>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveProject(${p.id})">Save</button>
+    </div>`).join('');
+}
+
+async function createProject() {
+  const name = document.getElementById('new-project-name').value.trim();
+  if (!name) return;
+  await fetch('/api/projects', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  });
+  document.getElementById('new-project-name').value = '';
+  loadProjects();
+}
+
+async function saveProject(id) {
+  const template = document.getElementById(`template-${id}`).value;
+  const bible = document.getElementById(`bible-${id}`).value;
+  await fetch(`/api/projects/${id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({brief_template: template, brand_bible: bible})
+  });
+  const btn = document.querySelector(`#project-${id} .btn-primary`);
+  btn.textContent = 'Saved ✓';
+  setTimeout(() => btn.textContent = 'Save', 1500);
+}
+
+async function deleteProject(id) {
+  if (!confirm('Delete this project?')) return;
+  await fetch(`/api/projects/${id}`, {method: 'DELETE'});
+  loadProjects();
+}
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+function formatNum(n) {
+  if (!n) return '0';
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function formatDate(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'});
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── START ───────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
