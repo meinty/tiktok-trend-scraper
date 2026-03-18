@@ -380,6 +380,17 @@ Generate a complete creative brief following the template above, adapted to this
     except Exception as e:
         return f'Error generating brief: {e}'
 
+def extract_product_from_url(url: str) -> dict:
+    """Fallback: extract product info from URL slug when scraping is blocked."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.strip('/').split('/') if p and not p.isdigit()]
+    slug = parts[-1] if parts else parsed.path
+    product_name = slug.replace('-', ' ').replace('_', ' ').title()
+    domain = parsed.netloc.replace('www.', '')
+    return {'url': url, 'product_name': product_name, 'description': f'Product sold on {domain}', 'page_title': product_name}
+
+
 def scrape_product_page(url: str) -> dict:
     """Fetch basic product info from a product page URL."""
     from html.parser import HTMLParser
@@ -721,11 +732,15 @@ def product_hashtags():
     if not url or not url.startswith('http'):
         return jsonify({'error': 'Valid URL required'}), 400
     try:
-        product_info = scrape_product_page(url)
+        try:
+            product_info = scrape_product_page(url)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in (403, 401, 429, 503):
+                product_info = extract_product_from_url(url)
+            else:
+                return jsonify({'error': f'Could not fetch URL: {e}'}), 400
         result = suggest_hashtags_for_product(product_info)
         return jsonify(result)
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Could not fetch URL: {str(e)}'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
