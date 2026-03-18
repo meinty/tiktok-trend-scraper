@@ -5,8 +5,11 @@ import requests
 import tempfile
 import time
 import uuid
+import secrets as _secrets
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, g
+from functools import wraps
+from urllib.parse import urlencode
+from flask import Flask, request, jsonify, render_template, g, session, redirect
 from dotenv import load_dotenv
 
 # Load env from PA root
@@ -16,11 +19,31 @@ app = Flask(__name__)
 
 APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN', '').strip().lstrip('=').strip()
 GOOGLE_AI_API_KEY = os.getenv('GOOGLE_AI_API_KEY', '').strip()
-# On Railway/cloud: use /tmp or RAILWAY_VOLUME_MOUNT_PATH if set
 _data_dir = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(__file__))
 DB_PATH = os.path.join(_data_dir, 'tiktok_scraper.db')
-
 DEMO_MODE = not bool(APIFY_API_TOKEN)
+
+# ── AUTH ──────────────────────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+app.secret_key = os.getenv('SECRET_KEY') or _secrets.token_hex(32)
+AUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+ALLOWED_DOMAIN = 'dorstenlesser.nl'
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if AUTH_ENABLED and 'user_id' not in session:
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Authentication required', 'login_url': '/login'}), 401
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated
+
+
+def current_user_id():
+    return session.get('user_id')  # None when auth disabled
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DATABASE
@@ -41,29 +64,62 @@ def close_connection(exception):
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute('''CREATE TABLE IF NOT EXISTS bookmarks (
+
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        video_id TEXT UNIQUE NOT NULL,
-        video_data TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        email TEXT UNIQUE NOT NULL,
+        name TEXT,
+        avatar TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    # Bookmarks: migrate to composite unique (user_id, video_id)
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(bookmarks)').fetchall()}
+    if not cols:
+        conn.execute('''CREATE TABLE bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_id TEXT NOT NULL,
+            video_data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, video_id)
+        )''')
+    elif 'user_id' not in cols:
+        conn.execute('''CREATE TABLE bookmarks_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_id TEXT NOT NULL,
+            video_data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, video_id)
+        )''')
+        conn.execute('INSERT INTO bookmarks_v2 (video_id, video_data, created_at) SELECT video_id, video_data, created_at FROM bookmarks')
+        conn.execute('DROP TABLE bookmarks')
+        conn.execute('ALTER TABLE bookmarks_v2 RENAME TO bookmarks')
+
     conn.execute('''CREATE TABLE IF NOT EXISTS recent_searches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
         keyword TEXT NOT NULL,
         date_range TEXT,
         video_count INTEGER,
         result_count INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
     conn.execute('''CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
         name TEXT NOT NULL,
         brief_template TEXT,
         brand_bible TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
     conn.execute('''CREATE TABLE IF NOT EXISTS briefs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
         project_id INTEGER,
         project_name TEXT,
         video_id TEXT,
@@ -71,6 +127,13 @@ def init_db():
         brief_content TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    # Migrate older tables missing user_id
+    for table in ('recent_searches', 'projects', 'briefs'):
+        existing = {r[1] for r in conn.execute(f'PRAGMA table_info({table})').fetchall()}
+        if 'user_id' not in existing:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN user_id INTEGER')
+
     conn.commit()
     conn.close()
 
@@ -619,14 +682,105 @@ def _mock_analysis() -> dict:
     }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# AUTH ROUTES
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.route('/login')
+def login_page():
+    if not AUTH_ENABLED:
+        return redirect('/')
+    if 'user_id' in session:
+        return redirect('/')
+    error = request.args.get('error', '')
+    return render_template('login.html', error=error)
+
+@app.route('/auth/google')
+def auth_google():
+    state = _secrets.token_urlsafe(16)
+    session['oauth_state'] = state
+    redirect_uri = request.host_url.rstrip('/') + '/auth/google/callback'
+    params = {
+        'client_id': GOOGLE_CLIENT_ID,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': 'openid email profile',
+        'state': state,
+        'hd': ALLOWED_DOMAIN,
+        'access_type': 'online',
+        'prompt': 'select_account',
+    }
+    return redirect('https://accounts.google.com/o/oauth2/v2/auth?' + urlencode(params))
+
+@app.route('/auth/google/callback')
+def auth_google_callback():
+    if request.args.get('state') != session.get('oauth_state'):
+        return redirect('/login?error=invalid_state')
+    code = request.args.get('code')
+    if not code:
+        return redirect('/login?error=no_code')
+
+    redirect_uri = request.host_url.rstrip('/') + '/auth/google/callback'
+    token_resp = requests.post('https://oauth2.googleapis.com/token', data={
+        'code': code, 'client_id': GOOGLE_CLIENT_ID, 'client_secret': GOOGLE_CLIENT_SECRET,
+        'redirect_uri': redirect_uri, 'grant_type': 'authorization_code',
+    }, timeout=10)
+    access_token = token_resp.json().get('access_token')
+    if not access_token:
+        return redirect('/login?error=token_failed')
+
+    userinfo = requests.get('https://www.googleapis.com/oauth2/v2/userinfo',
+                            headers={'Authorization': f'Bearer {access_token}'}, timeout=10).json()
+    email = userinfo.get('email', '')
+    if not email.lower().endswith(f'@{ALLOWED_DOMAIN}'):
+        return redirect('/login?error=wrong_domain')
+
+    db = get_db()
+    existing = db.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+    if existing:
+        db.execute('UPDATE users SET name=?, avatar=?, last_login=CURRENT_TIMESTAMP WHERE id=?',
+                   (userinfo.get('name'), userinfo.get('picture'), existing['id']))
+        user_id = existing['id']
+    else:
+        cur = db.execute('INSERT INTO users (email, name, avatar) VALUES (?, ?, ?)',
+                         (email, userinfo.get('name'), userinfo.get('picture')))
+        user_id = cur.lastrowid
+    db.commit()
+
+    session.permanent = True
+    session['user_id'] = user_id
+    session['user_email'] = email
+    session['user_name'] = userinfo.get('name', email.split('@')[0])
+    session['user_avatar'] = userinfo.get('picture', '')
+    session.pop('oauth_state', None)
+    return redirect('/')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login' if AUTH_ENABLED else '/')
+
+@app.route('/api/me')
+@login_required
+def me():
+    return jsonify({
+        'id': session.get('user_id'),
+        'email': session.get('user_email', ''),
+        'name': session.get('user_name', ''),
+        'avatar': session.get('user_avatar', ''),
+        'auth_enabled': AUTH_ENABLED,
+    })
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ROUTES
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html', demo_mode=DEMO_MODE)
 
 @app.route('/api/status')
+@login_required
 def status():
     apify = bool(os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN))
     gemini = bool(os.environ.get('GOOGLE_AI_API_KEY', GOOGLE_AI_API_KEY))
@@ -638,6 +792,7 @@ def status():
     })
 
 @app.route('/api/search', methods=['POST'])
+@login_required
 def search():
     data = request.json or {}
     keyword = data.get('keyword', '').strip()
@@ -647,12 +802,13 @@ def search():
     if not keyword:
         return jsonify({'error': 'Keyword required'}), 400
 
+    uid = current_user_id()
     token = os.environ.get('APIFY_API_TOKEN', APIFY_API_TOKEN)
     if not token:
         videos = _mock_videos(keyword, max_items)
         db = get_db()
-        db.execute('INSERT INTO recent_searches (keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?)',
-                   (keyword, date_range, max_items, len(videos)))
+        db.execute('INSERT INTO recent_searches (user_id, keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?, ?)',
+                   (uid, keyword, date_range, max_items, len(videos)))
         db.commit()
         return jsonify({'videos': videos, 'demo_mode': True, 'count': len(videos)})
 
@@ -664,6 +820,7 @@ def search():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/search/poll/<run_id>', methods=['GET'])
+@login_required
 def poll_search(run_id):
     keyword = request.args.get('keyword', '')
     date_range = request.args.get('date_range', 'all')
@@ -676,9 +833,10 @@ def poll_search(run_id):
         if status in ('SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'):
             videos = get_run_results(run_id, date_range, max_items) if status == 'SUCCEEDED' else []
             if keyword:
+                uid = current_user_id()
                 db = get_db()
-                db.execute('INSERT INTO recent_searches (keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?)',
-                           (keyword, date_range, max_items, len(videos)))
+                db.execute('INSERT INTO recent_searches (user_id, keyword, date_range, video_count, result_count) VALUES (?, ?, ?, ?, ?)',
+                           (uid, keyword, date_range, max_items, len(videos)))
                 db.commit()
             return jsonify({'status': status, 'videos': videos, 'count': len(videos), 'done': True})
 
@@ -687,6 +845,7 @@ def poll_search(run_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/analyze', methods=['POST'])
+@login_required
 def analyze():
     data = request.json or {}
     video = data.get('video', {})
@@ -702,6 +861,7 @@ def analyze():
     return jsonify(analysis)
 
 @app.route('/api/transcript', methods=['POST'])
+@login_required
 def transcript():
     data = request.json or {}
     subtitles = data.get('subtitles', [])
@@ -730,6 +890,7 @@ def transcript():
     return jsonify({'transcript': text})
 
 @app.route('/api/product-hashtags', methods=['POST'])
+@login_required
 def product_hashtags():
     data = request.json or {}
     url = data.get('url', '').strip()
@@ -750,52 +911,71 @@ def product_hashtags():
 
 # Bookmarks
 @app.route('/api/bookmarks', methods=['GET'])
+@login_required
 def get_bookmarks():
+    uid = current_user_id()
     db = get_db()
-    rows = db.execute('SELECT * FROM bookmarks ORDER BY created_at DESC').fetchall()
+    if uid is None:
+        rows = db.execute('SELECT * FROM bookmarks ORDER BY created_at DESC').fetchall()
+    else:
+        rows = db.execute('SELECT * FROM bookmarks WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC', (uid,)).fetchall()
     return jsonify([dict(r) | {'video_data': json.loads(r['video_data'])} for r in rows])
 
 @app.route('/api/bookmarks', methods=['POST'])
+@login_required
 def add_bookmark():
     data = request.json or {}
     video = data.get('video', {})
     video_id = video.get('id', '')
-
     if not video_id:
         return jsonify({'error': 'Video ID required'}), 400
-
+    uid = current_user_id()
     db = get_db()
     try:
-        db.execute(
-            'INSERT INTO bookmarks (video_id, video_data) VALUES (?, ?)',
-            (video_id, json.dumps(video))
-        )
+        db.execute('INSERT INTO bookmarks (user_id, video_id, video_data) VALUES (?, ?, ?)',
+                   (uid, video_id, json.dumps(video)))
         db.commit()
         return jsonify({'success': True, 'message': 'Bookmarked'})
     except sqlite3.IntegrityError:
         return jsonify({'error': 'Already bookmarked'}), 409
 
 @app.route('/api/bookmarks/<video_id>', methods=['DELETE'])
+@login_required
 def remove_bookmark(video_id):
+    uid = current_user_id()
     db = get_db()
-    db.execute('DELETE FROM bookmarks WHERE video_id = ?', (video_id,))
+    if uid is None:
+        db.execute('DELETE FROM bookmarks WHERE video_id = ?', (video_id,))
+    else:
+        db.execute('DELETE FROM bookmarks WHERE video_id = ? AND user_id = ?', (video_id, uid))
     db.commit()
     return jsonify({'success': True})
 
 @app.route('/api/bookmarks/check/<video_id>', methods=['GET'])
+@login_required
 def check_bookmark(video_id):
+    uid = current_user_id()
     db = get_db()
-    row = db.execute('SELECT id FROM bookmarks WHERE video_id = ?', (video_id,)).fetchone()
+    if uid is None:
+        row = db.execute('SELECT id FROM bookmarks WHERE video_id = ?', (video_id,)).fetchone()
+    else:
+        row = db.execute('SELECT id FROM bookmarks WHERE video_id = ? AND user_id = ?', (video_id, uid)).fetchone()
     return jsonify({'bookmarked': row is not None})
 
 # Recent searches
 @app.route('/api/recent-searches', methods=['GET'])
+@login_required
 def get_recent_searches():
+    uid = current_user_id()
     db = get_db()
-    rows = db.execute('SELECT * FROM recent_searches ORDER BY created_at DESC LIMIT 20').fetchall()
+    if uid is None:
+        rows = db.execute('SELECT * FROM recent_searches ORDER BY created_at DESC LIMIT 20').fetchall()
+    else:
+        rows = db.execute('SELECT * FROM recent_searches WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC LIMIT 20', (uid,)).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/recent-searches/<int:search_id>', methods=['DELETE'])
+@login_required
 def delete_recent_search(search_id):
     db = get_db()
     db.execute('DELETE FROM recent_searches WHERE id = ?', (search_id,))
@@ -804,40 +984,44 @@ def delete_recent_search(search_id):
 
 # Projects
 @app.route('/api/projects', methods=['GET'])
+@login_required
 def get_projects():
+    uid = current_user_id()
     db = get_db()
-    rows = db.execute('SELECT * FROM projects ORDER BY created_at DESC').fetchall()
+    if uid is None:
+        rows = db.execute('SELECT * FROM projects ORDER BY created_at DESC').fetchall()
+    else:
+        rows = db.execute('SELECT * FROM projects WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC', (uid,)).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/projects', methods=['POST'])
+@login_required
 def create_project():
     data = request.json or {}
     name = data.get('name', '').strip()
     if not name:
         return jsonify({'error': 'Project name required'}), 400
-
+    uid = current_user_id()
     db = get_db()
-    cursor = db.execute(
-        'INSERT INTO projects (name, brief_template, brand_bible) VALUES (?, ?, ?)',
-        (name, data.get('brief_template', ''), data.get('brand_bible', ''))
-    )
+    cursor = db.execute('INSERT INTO projects (user_id, name, brief_template, brand_bible) VALUES (?, ?, ?, ?)',
+                        (uid, name, data.get('brief_template', ''), data.get('brand_bible', '')))
     db.commit()
     project = db.execute('SELECT * FROM projects WHERE id = ?', (cursor.lastrowid,)).fetchone()
     return jsonify(dict(project)), 201
 
 @app.route('/api/projects/<int:project_id>', methods=['PUT'])
+@login_required
 def update_project(project_id):
     data = request.json or {}
     db = get_db()
-    db.execute(
-        'UPDATE projects SET brief_template = ?, brand_bible = ? WHERE id = ?',
-        (data.get('brief_template', ''), data.get('brand_bible', ''), project_id)
-    )
+    db.execute('UPDATE projects SET brief_template = ?, brand_bible = ? WHERE id = ?',
+               (data.get('brief_template', ''), data.get('brand_bible', ''), project_id))
     db.commit()
     project = db.execute('SELECT * FROM projects WHERE id = ?', (project_id,)).fetchone()
     return jsonify(dict(project))
 
 @app.route('/api/projects/<int:project_id>', methods=['DELETE'])
+@login_required
 def delete_project(project_id):
     db = get_db()
     db.execute('DELETE FROM projects WHERE id = ?', (project_id,))
@@ -846,38 +1030,42 @@ def delete_project(project_id):
 
 # Briefs
 @app.route('/api/briefs', methods=['GET'])
+@login_required
 def get_briefs():
+    uid = current_user_id()
     db = get_db()
-    rows = db.execute('SELECT * FROM briefs ORDER BY created_at DESC').fetchall()
+    if uid is None:
+        rows = db.execute('SELECT * FROM briefs ORDER BY created_at DESC').fetchall()
+    else:
+        rows = db.execute('SELECT * FROM briefs WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC', (uid,)).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/briefs', methods=['POST'])
+@login_required
 def create_brief():
     data = request.json or {}
     video = data.get('video', {})
     project_id = data.get('project_id')
     analysis = data.get('analysis')
-
     if not video or not project_id:
         return jsonify({'error': 'Video and project_id required'}), 400
-
+    uid = current_user_id()
     db = get_db()
     project = db.execute('SELECT * FROM projects WHERE id = ?', (project_id,)).fetchone()
     if not project:
         return jsonify({'error': 'Project not found'}), 404
-
     project_dict = dict(project)
     brief_content = generate_brief(video, project_dict, analysis)
-
     cursor = db.execute(
-        'INSERT INTO briefs (project_id, project_name, video_id, video_url, brief_content) VALUES (?, ?, ?, ?, ?)',
-        (project_id, project_dict['name'], video.get('id', ''), video.get('tiktok_url', ''), brief_content)
+        'INSERT INTO briefs (user_id, project_id, project_name, video_id, video_url, brief_content) VALUES (?, ?, ?, ?, ?, ?)',
+        (uid, project_id, project_dict['name'], video.get('id', ''), video.get('tiktok_url', ''), brief_content)
     )
     db.commit()
     brief = db.execute('SELECT * FROM briefs WHERE id = ?', (cursor.lastrowid,)).fetchone()
     return jsonify(dict(brief)), 201
 
 @app.route('/api/briefs/<int:brief_id>', methods=['GET'])
+@login_required
 def get_brief(brief_id):
     db = get_db()
     brief = db.execute('SELECT * FROM briefs WHERE id = ?', (brief_id,)).fetchone()
@@ -886,6 +1074,7 @@ def get_brief(brief_id):
     return jsonify(dict(brief))
 
 @app.route('/api/briefs/<int:brief_id>', methods=['DELETE'])
+@login_required
 def delete_brief(brief_id):
     db = get_db()
     db.execute('DELETE FROM briefs WHERE id = ?', (brief_id,))

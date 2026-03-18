@@ -550,6 +550,16 @@
       <span class="icon">⚙</span> Settings
     </div>
     <div class="nav-bottom">
+      <div id="user-profile" style="display:none; margin-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <img id="user-avatar" src="" style="width:32px; height:32px; border-radius:50%; object-fit:cover; background:#333; display:none;">
+          <div style="min-width:0; flex:1;">
+            <div id="user-name" style="font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+            <div id="user-email" style="font-size:10px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+          </div>
+          <a href="/logout" title="Sign out" style="color:var(--text-dim); font-size:14px; text-decoration:none; flex-shrink:0;" onmouseenter="this.style.color='var(--accent)'" onmouseleave="this.style.color='var(--text-dim)'">↩</a>
+        </div>
+      </div>
       <div class="demo-badge" id="mode-badge">
         <span id="mode-dot">●</span>
         <span id="mode-text">Checking...</span>
@@ -773,8 +783,26 @@ let currentSortMode = 'views'; // 'views' | 'trending'
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 async function init() {
-  await loadStatus();
+  await Promise.all([loadStatus(), loadUserProfile()]);
   loadHome();
+}
+
+async function loadUserProfile() {
+  try {
+    const r = await fetch('/api/me');
+    if (!r.ok) return;
+    const u = await r.json();
+    if (!u.auth_enabled) return;
+    const wrap = document.getElementById('user-profile');
+    document.getElementById('user-name').textContent = u.name || u.email;
+    document.getElementById('user-email').textContent = u.email;
+    if (u.avatar) {
+      const img = document.getElementById('user-avatar');
+      img.src = u.avatar;
+      img.style.display = 'block';
+    }
+    wrap.style.display = 'block';
+  } catch(e) {}
 }
 
 async function loadStatus() {
@@ -1526,6 +1554,18 @@ function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ─── 401 HANDLER ─────────────────────────────────────────────────────────────
+// Intercept fetch to redirect on session expiry
+const _origFetch = window.fetch;
+window.fetch = async (...args) => {
+  const r = await _origFetch(...args);
+  if (r.status === 401) {
+    const body = await r.clone().json().catch(() => ({}));
+    if (body.login_url) { window.location.href = body.login_url; }
+  }
+  return r;
+};
 
 // ─── START ───────────────────────────────────────────────────────────────────
 init();
