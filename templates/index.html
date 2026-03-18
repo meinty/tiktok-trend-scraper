@@ -501,8 +501,12 @@
     font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--transition);
   }
   .hashtag-chip:hover { background: rgba(105,201,208,0.2); border-color: rgba(105,201,208,0.4); transform: translateY(-1px); }
+  .hashtag-chip.selected { background: rgba(254,44,85,0.15); border-color: rgba(254,44,85,0.4); color: var(--accent); }
+  .hashtag-chip.selected:hover { background: rgba(254,44,85,0.25); }
   .hashtag-chip-type { font-size: 10px; color: var(--text-dim); font-weight: 400; }
   .product-search-tip { font-size: 12px; color: var(--text-dim); font-style: italic; }
+  .hashtag-search-bar { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .hashtag-search-bar .btn { flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -1329,7 +1333,7 @@ async function analyzeProductUrl() {
 
 function renderProductHashtags(data, el) {
   const chips = (data.hashtags || []).map(h => `
-    <div class="hashtag-chip" data-tag="${escHtml(h.tag)}" onclick="searchFromHashtag(this.dataset.tag)" title="${escHtml(h.why || '')}">
+    <div class="hashtag-chip" data-tag="${escHtml(h.tag)}" onclick="toggleHashtag(this)" title="${escHtml(h.why || '')}">
       #${escHtml(h.tag)}<span class="hashtag-chip-type">${escHtml(h.type || '')}</span>
     </div>`).join('');
 
@@ -1337,8 +1341,101 @@ function renderProductHashtags(data, el) {
     <div class="product-result-name">${escHtml(data.product_name || '')}</div>
     <div class="product-result-category">${escHtml(data.category || '')}</div>
     <div class="hashtag-chips">${chips}</div>
-    ${data.search_tip ? `<div class="product-search-tip">${escHtml(data.search_tip)}</div>` : ''}
+    <div class="hashtag-search-bar" id="hashtag-search-bar" style="display:none">
+      <button class="btn btn-primary btn-sm" onclick="searchSelectedHashtags()">
+        ⌕ Search <span id="hashtag-search-count">0</span> hashtags
+      </button>
+      <span style="font-size:12px; color:var(--text-dim)">results will be merged and sorted by views</span>
+    </div>
+    ${data.search_tip ? `<div class="product-search-tip" style="margin-top:10px">${escHtml(data.search_tip)}</div>` : ''}
   </div>`;
+}
+
+function toggleHashtag(el) {
+  el.classList.toggle('selected');
+  const count = document.querySelectorAll('.hashtag-chip.selected').length;
+  const bar = document.getElementById('hashtag-search-bar');
+  if (!bar) return;
+  bar.style.display = count > 0 ? 'flex' : 'none';
+  document.getElementById('hashtag-search-count').textContent = count;
+}
+
+async function searchSelectedHashtags() {
+  const selected = [...document.querySelectorAll('.hashtag-chip.selected')];
+  if (!selected.length) return;
+  const tags = selected.map(el => el.dataset.tag);
+
+  // Deselect all
+  selected.forEach(el => el.classList.remove('selected'));
+  document.getElementById('hashtag-search-bar').style.display = 'none';
+
+  const dateRange = document.getElementById('search-date').value;
+  const perTag = Math.max(10, Math.floor(parseInt(document.getElementById('search-count').value) / tags.length));
+
+  const searchBtn = document.getElementById('search-btn');
+  const status = document.getElementById('search-status');
+  searchBtn.disabled = true;
+  status.classList.add('visible');
+  document.getElementById('search-status-text').textContent = `Starting ${tags.length} searches in parallel...`;
+
+  try {
+    // Start all runs simultaneously
+    const runs = await Promise.all(tags.map(tag =>
+      fetch('/api/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({keyword: tag, date_range: dateRange, max_items: perTag})
+      }).then(r => r.json()).then(d => ({tag, run_id: d.run_id, done: !!d.demo_mode, videos: d.videos || []}))
+    ));
+
+    // All demo mode — merge immediately
+    if (runs.every(r => r.done)) {
+      const merged = dedupeAndSort(runs.flatMap(r => r.videos));
+      status.classList.remove('visible');
+      searchBtn.disabled = false; searchBtn.textContent = '⌕ Search';
+      renderSearchResults(merged, tags.map(t => '#' + t).join(' + '));
+      return;
+    }
+
+    const pending = runs.filter(r => !r.done);
+    const allVideos = runs.filter(r => r.done).flatMap(r => r.videos);
+    let dots = 0;
+
+    const poll = setInterval(async () => {
+      dots = (dots + 1) % 4;
+      const remaining = pending.filter(r => !r.done).length;
+      document.getElementById('search-status-text').textContent =
+        `Scraping ${remaining}/${tags.length} hashtag${tags.length > 1 ? 's' : ''}` + '.'.repeat(dots + 1);
+
+      await Promise.all(pending.filter(r => !r.done).map(async run => {
+        try {
+          const pr = await fetch(`/api/search/poll/${run.run_id}?keyword=${encodeURIComponent(run.tag)}&date_range=${dateRange}&max_items=${perTag}`);
+          const pd = await pr.json();
+          if (pd.done) { run.done = true; allVideos.push(...(pd.videos || [])); }
+        } catch(e) { run.done = true; }
+      }));
+
+      if (pending.every(r => r.done)) {
+        clearInterval(poll);
+        status.classList.remove('visible');
+        searchBtn.disabled = false; searchBtn.textContent = '⌕ Search';
+        renderSearchResults(dedupeAndSort(allVideos), tags.map(t => '#' + t).join(' + '));
+      }
+    }, 3000);
+
+  } catch(e) {
+    status.classList.remove('visible');
+    searchBtn.disabled = false; searchBtn.textContent = '⌕ Search';
+    document.getElementById('search-results').innerHTML =
+      `<div class="empty"><div class="empty-icon">!</div><p>Search failed: ${e.message}</p></div>`;
+  }
+}
+
+function dedupeAndSort(videos) {
+  const seen = new Set();
+  return videos
+    .filter(v => { if (seen.has(v.id)) return false; seen.add(v.id); return true; })
+    .sort((a, b) => b.views - a.views);
 }
 
 function searchFromHashtag(tag) {
