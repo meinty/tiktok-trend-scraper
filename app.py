@@ -192,7 +192,24 @@ def analyze_video_with_gemini(video: dict, comments: list) -> dict:
 
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_AI_API_KEY)
-    model = genai.GenerativeModel('gemini-3')
+
+    # Pick first available model that supports generateContent
+    preferred = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+                 'gemini-1.5-flash', 'gemini-1.5-pro']
+    model_name = None
+    try:
+        available = {m.name.replace('models/', '') for m in genai.list_models()
+                     if 'generateContent' in m.supported_generation_methods}
+        for name in preferred:
+            if name in available:
+                model_name = name
+                break
+        if not model_name:
+            model_name = next(iter(available)) if available else preferred[0]
+    except Exception:
+        model_name = preferred[0]
+
+    model = genai.GenerativeModel(model_name)
 
     # Build context from available data
     caption = video.get('caption', '')
@@ -312,7 +329,23 @@ def generate_brief(video: dict, project: dict, analysis: dict = None) -> str:
 
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_AI_API_KEY)
-    model = genai.GenerativeModel('gemini-3')
+
+    preferred = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+                 'gemini-1.5-flash', 'gemini-1.5-pro']
+    model_name = None
+    try:
+        available = {m.name.replace('models/', '') for m in genai.list_models()
+                     if 'generateContent' in m.supported_generation_methods}
+        for name in preferred:
+            if name in available:
+                model_name = name
+                break
+        if not model_name:
+            model_name = next(iter(available)) if available else preferred[0]
+    except Exception:
+        model_name = preferred[0]
+
+    model = genai.GenerativeModel(model_name)
 
     template = project.get('brief_template', '') or _default_brief_template()
     brand_bible = project.get('brand_bible', '') or ''
